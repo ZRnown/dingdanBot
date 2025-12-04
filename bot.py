@@ -355,16 +355,10 @@ class TelegramBot:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log(f"[{ts}] 后台同步订单 {order_id}，已尝试 {attempts_before} 次")
 
-        # 如果已经提前超过当前配置的上限，就直接停止，不再继续同步一次
+        # 如果已经提前超过当前配置的上限，就直接停止，不再继续同步一次（只记日志，不再给用户发消息）
         if effective_max_attempts and attempts_before >= effective_max_attempts:
             warn_msg = f"同步超过 {effective_max_attempts} 次，订单状态仍未变为退单中/已退款/已退单。"
-            log(f"[{ts}] 订单 {order_id} {warn_msg}（已达上限，跳过本次同步）")
-            await self._notify_user(
-                bot,
-                task['chat_id'],
-                task['message_id'],
-                warn_msg
-            )
+            log(f"[{ts}] 订单 {order_id} {warn_msg}（已达上限，跳过本次同步，仅后台记录）")
             self.db.delete_sync_task(order_id)
             return
         
@@ -409,16 +403,10 @@ class TelegramBot:
             self.db.delete_sync_task(order_id)
             return
         
-        # 有上限且达到/超过上限时，发一条提示然后停止同步
+        # 有上限且达到/超过上限时，只在后台记录并停止同步，不再给用户发消息
         if effective_max_attempts and attempts >= effective_max_attempts:
             warn_msg = f"同步超过 {effective_max_attempts} 次，订单状态仍未变为退单中/已退款/已退单。"
             log(f"[{ts_done}] 订单 {order_id} {warn_msg}")
-            await self._notify_user(
-                bot,
-                task['chat_id'],
-                task['message_id'],
-                warn_msg
-            )
             self.db.delete_sync_task(order_id)
 
     async def _notify_user(self, bot, chat_id: int, message_id: int, text: str):
