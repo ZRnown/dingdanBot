@@ -9,6 +9,7 @@ from config import Config
 from database import Database
 from order_api import OrderAPI
 from bot import TelegramBot
+from logger import log
 
 class OrderSyncService:
     def __init__(self, db: Database, order_api: OrderAPI):
@@ -19,7 +20,7 @@ class OrderSyncService:
     
     def sync_recent_orders(self):
         """同步最近两天的订单"""
-        print("\n=== 开始同步最近2天的订单 ===")
+        log("\n=== 开始同步最近2天的订单 ===")
         
         # 获取选中的第三方ID
         shequ_ids = self.db.get_selected_shequ_ids()
@@ -27,9 +28,9 @@ class OrderSyncService:
             shequ_ids = None  # None表示获取全部
         
         if shequ_ids:
-            print(f"已选择第三方: {shequ_ids}")
+            log(f"已选择第三方: {shequ_ids}")
         else:
-            print("获取全部第三方的订单")
+            log("获取全部第三方的订单")
         
         orders = self.order_api.get_recent_orders(days=2, shequ_ids=shequ_ids)
         
@@ -37,29 +38,29 @@ class OrderSyncService:
             # 如果选择了特定第三方，只保存属于这些第三方的订单
             if shequ_ids:
                 filtered_orders = [order for order in orders if order.get('ShequId', 0) in shequ_ids]
-                print(f"过滤后剩余 {len(filtered_orders)} 个订单（属于选中的第三方）")
+                log(f"过滤后剩余 {len(filtered_orders)} 个订单（属于选中的第三方）")
                 orders = filtered_orders
             
             count = self.db.insert_orders_batch(orders)
-            print(f"成功存储 {count} 个订单")
+            log(f"成功存储 {count} 个订单")
             
             # 更新最后处理的订单ID
             if orders:
                 self.last_order_id = max(order.get('Id', 0) for order in orders)
-                print(f"最后处理的订单ID: {self.last_order_id}")
+                log(f"最后处理的订单ID: {self.last_order_id}")
         else:
-            print("没有获取到订单")
+            log("没有获取到订单")
         
         # 清理超过2天的订单
         deleted_count = self.db.delete_expired_orders(days=2)
         if deleted_count > 0:
-            print(f"已清理 {deleted_count} 个过期订单")
+            log(f"已清理 {deleted_count} 个过期订单")
         
-        print("=== 同步完成 ===\n")
+        log("=== 同步完成 ===\n")
     
     def check_new_orders(self):
         """检查新订单"""
-        print("\n=== 检查新订单 ===")
+        log("\n=== 检查新订单 ===")
         
         # 获取选中的第三方ID
         shequ_ids = self.db.get_selected_shequ_ids()
@@ -73,39 +74,39 @@ class OrderSyncService:
         )
         
         if new_orders:
-            print(f"发现 {len(new_orders)} 个新订单")
+            log(f"发现 {len(new_orders)} 个新订单")
             
             # 如果选择了特定第三方，只保存属于这些第三方的订单
             if shequ_ids:
                 filtered_orders = [order for order in new_orders if order.get('ShequId', 0) in shequ_ids]
-                print(f"过滤后剩余 {len(filtered_orders)} 个订单（属于选中的第三方）")
+                log(f"过滤后剩余 {len(filtered_orders)} 个订单（属于选中的第三方）")
                 new_orders = filtered_orders
             
             count = self.db.insert_orders_batch(new_orders)
-            print(f"成功存储 {count} 个新订单")
+            log(f"成功存储 {count} 个新订单")
             
             # 更新最后处理的订单ID
             self.last_order_id = max(order.get('Id', 0) for order in new_orders)
-            print(f"最后处理的订单ID: {self.last_order_id}")
+            log(f"最后处理的订单ID: {self.last_order_id}")
         else:
-            print("没有新订单")
+            log("没有新订单")
         
         # 清理超过2天的订单
         deleted_count = self.db.delete_expired_orders(days=2)
         if deleted_count > 0:
-            print(f"已清理 {deleted_count} 个过期订单")
+            log(f"已清理 {deleted_count} 个过期订单")
         
-        print("=== 检查完成 ===\n")
+        log("=== 检查完成 ===\n")
     
     def cleanup_expired_orders(self):
         """清理超过2天的订单"""
-        print("\n=== 清理过期订单 ===")
+        log("\n=== 清理过期订单 ===")
         deleted_count = self.db.delete_expired_orders(days=2)
         if deleted_count > 0:
-            print(f"已清理 {deleted_count} 个超过2天的订单")
+            log(f"已清理 {deleted_count} 个超过2天的订单")
         else:
-            print("没有需要清理的过期订单")
-        print("=== 清理完成 ===\n")
+            log("没有需要清理的过期订单")
+        log("=== 清理完成 ===\n")
     
     def run_periodic_check(self):
         """定期检查新订单"""
@@ -135,9 +136,9 @@ class OrderSyncService:
 
 def main():
     """主函数"""
-    print("=" * 50)
-    print("Telegram 客服机器人启动中...")
-    print("=" * 50)
+    log("=" * 50)
+    log("Telegram 客服机器人启动中...")
+    log("=" * 50)
     
     # 验证配置
     try:
@@ -148,34 +149,34 @@ def main():
         return
     
     # 初始化组件
-    print("初始化数据库...")
+    log("初始化数据库...")
     db = Database()
     
-    print("初始化订单API...")
+    log("初始化订单API...")
     order_api = OrderAPI()
     
-    print("初始化订单同步服务...")
+    log("初始化订单同步服务...")
     sync_service = OrderSyncService(db, order_api)
     
-    print("初始化Telegram Bot...")
+    log("初始化Telegram Bot...")
     bot = TelegramBot(db, order_api)
     
     # 在后台线程中运行订单同步服务
     sync_thread = threading.Thread(target=sync_service.run_periodic_check, daemon=True)
     sync_thread.start()
     
-    print("所有服务已启动")
-    print("=" * 50)
-    print("按 Ctrl+C 停止服务")
-    print("=" * 50)
+    log("所有服务已启动")
+    log("=" * 50)
+    log("按 Ctrl+C 停止服务")
+    log("=" * 50)
     
     try:
         # 运行Telegram Bot（阻塞）
         bot.run()
     except KeyboardInterrupt:
-        print("\n正在停止服务...")
+        log("\n正在停止服务...")
         sync_service.stop()
-        print("服务已停止")
+        log("服务已停止")
 
 if __name__ == '__main__':
     main()

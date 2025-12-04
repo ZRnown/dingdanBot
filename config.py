@@ -21,6 +21,10 @@ class Config:
     PAGE_SIZE = int(os.getenv('PAGE_SIZE', '500'))
     SYNC_TASK_INTERVAL = int(os.getenv('SYNC_TASK_INTERVAL', '180'))  # 默认3分钟
     
+    # 日志配置
+    LOG_DIR = os.getenv('LOG_DIR', 'logs')
+    LOG_RETENTION_DAYS = int(os.getenv('LOG_RETENTION_DAYS', '7'))
+    
     @classmethod
     def validate(cls):
         """验证必要的配置项"""
