@@ -17,6 +17,7 @@ class TelegramBot:
         self.order_api = order_api
         self.bot_token = Config.TELEGRAM_BOT_TOKEN
         self.sync_interval = Config.SYNC_TASK_INTERVAL
+        self.max_sync_attempts = Config.MAX_SYNC_ATTEMPTS
         self.target_refund_statuses = ['退单中', '已退款', '已退单']
         
         # 抖音链接正则表达式
@@ -84,7 +85,7 @@ class TelegramBot:
                 chat_id=chat_id,
                 message_id=message_id,
                 initial_attempts=0,
-                max_attempts=0,
+                max_attempts=self.max_sync_attempts,
                 douyin_url=order.get('douyin_url', ''),
                 shequ_id=order.get('shequ_id', 0),
                 order_sn=order.get('order_sn', '')
@@ -340,6 +341,7 @@ class TelegramBot:
         """执行单个同步任务"""
         order_id = task['order_id']
         attempts_before = task.get('attempts', 0)
+        max_attempts = task.get('max_attempts', 0)
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log(f"[{ts}] 后台同步订单 {order_id}，已尝试 {attempts_before} 次")
         
@@ -374,6 +376,19 @@ class TelegramBot:
                 task['chat_id'],
                 task['message_id'],
                 f"订单{refund_status}"
+            )
+            self.db.delete_sync_task(order_id)
+            return
+        
+        # 有上限且达到/超过上限时，发一条提示然后停止同步
+        if max_attempts and attempts >= max_attempts:
+            warn_msg = f"同步超过 {max_attempts} 次，订单状态仍未变为退单中/已退款/已退单。"
+            log(f"[{ts_done}] 订单 {order_id} {warn_msg}")
+            await self._notify_user(
+                bot,
+                task['chat_id'],
+                task['message_id'],
+                warn_msg
             )
             self.db.delete_sync_task(order_id)
 

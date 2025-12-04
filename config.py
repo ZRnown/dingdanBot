@@ -25,6 +25,9 @@ class Config:
     LOG_DIR = os.getenv('LOG_DIR', 'logs')
     LOG_RETENTION_DAYS = int(os.getenv('LOG_RETENTION_DAYS', '7'))
     
+    # 同步重试上限（0 表示无限次）
+    MAX_SYNC_ATTEMPTS = int(os.getenv('MAX_SYNC_ATTEMPTS', '300'))
+    
     @classmethod
     def validate(cls):
         """验证必要的配置项"""
