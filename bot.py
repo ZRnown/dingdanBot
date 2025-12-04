@@ -17,6 +17,7 @@ class TelegramBot:
         self.order_api = order_api
         self.bot_token = Config.TELEGRAM_BOT_TOKEN
         self.sync_interval = Config.SYNC_TASK_INTERVAL
+        self.sync_max_workers = Config.SYNC_MAX_WORKERS
         self.max_sync_attempts = Config.MAX_SYNC_ATTEMPTS
         self.target_refund_statuses = ['退单中', '已退款', '已退单']
         
@@ -332,26 +333,54 @@ class TelegramBot:
         tasks = self.db.get_due_sync_tasks(self.sync_interval)
         if not tasks:
             return
-        
+
         bot = context.bot
-        for task in tasks:
-            await self._process_single_sync_task(bot, task)
+
+        # 限制并行度，避免把服务器压死
+        sem = asyncio.Semaphore(self.sync_max_workers)
+
+        async def worker(task):
+            async with sem:
+                await self._process_single_sync_task(bot, task)
+
+        await asyncio.gather(*(worker(task) for task in tasks))
 
     async def _process_single_sync_task(self, bot, task: Dict):
         """执行单个同步任务"""
         order_id = task['order_id']
         attempts_before = task.get('attempts', 0)
         max_attempts = task.get('max_attempts', 0)
+        # 对于旧任务 max_attempts=0 的情况，用当前配置的上限作为“有效上限”
+        effective_max_attempts = max_attempts or self.max_sync_attempts
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log(f"[{ts}] 后台同步订单 {order_id}，已尝试 {attempts_before} 次")
+
+        # 如果已经提前超过当前配置的上限，就直接停止，不再继续同步一次
+        if effective_max_attempts and attempts_before >= effective_max_attempts:
+            warn_msg = f"同步超过 {effective_max_attempts} 次，订单状态仍未变为退单中/已退款/已退单。"
+            log(f"[{ts}] 订单 {order_id} {warn_msg}（已达上限，跳过本次同步）")
+            await self._notify_user(
+                bot,
+                task['chat_id'],
+                task['message_id'],
+                warn_msg
+            )
+            self.db.delete_sync_task(order_id)
+            return
         
-        try:
-            result = self.order_api.sync_order(order_id, max_retries=1, retry_interval_min=0, retry_interval_max=0)
-        except Exception as e:
-            log(f"同步订单 {order_id} 异常: {e}")
-            result = {'message': str(e)}
-        
-        order_detail = self.order_api.get_order_status_by_id(order_id)
+        # 把真正的 HTTP 请求放到线程里执行，避免阻塞事件循环
+        def _do_sync_blocking():
+            try:
+                result_inner = self.order_api.sync_order(order_id, max_retries=1, retry_interval_min=0, retry_interval_max=0)
+            except Exception as e_inner:
+                log(f"同步订单 {order_id} 异常: {e_inner}")
+                result_inner = {'message': str(e_inner)}
+
+            order_detail_inner = self.order_api.get_order_status_by_id(order_id)
+            return result_inner, order_detail_inner
+
+        result, order_detail = await asyncio.to_thread(_do_sync_blocking)
+
         if order_detail:
             self.db.insert_order(order_detail)
         refund_status = self.order_api.extract_refund_status(order_detail)
@@ -381,8 +410,8 @@ class TelegramBot:
             return
         
         # 有上限且达到/超过上限时，发一条提示然后停止同步
-        if max_attempts and attempts >= max_attempts:
-            warn_msg = f"同步超过 {max_attempts} 次，订单状态仍未变为退单中/已退款/已退单。"
+        if effective_max_attempts and attempts >= effective_max_attempts:
+            warn_msg = f"同步超过 {effective_max_attempts} 次，订单状态仍未变为退单中/已退款/已退单。"
             log(f"[{ts_done}] 订单 {order_id} {warn_msg}")
             await self._notify_user(
                 bot,

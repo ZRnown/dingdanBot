@@ -27,6 +27,10 @@ class Config:
     
     # 同步重试上限（0 表示无限次）
     MAX_SYNC_ATTEMPTS = int(os.getenv('MAX_SYNC_ATTEMPTS', '300'))
+
+    # 并行相关配置
+    SHEQU_MAX_WORKERS = int(os.getenv('SHEQU_MAX_WORKERS', '20'))   # 获取订单时的最大并行第三方数
+    SYNC_MAX_WORKERS = int(os.getenv('SYNC_MAX_WORKERS', '10'))     # 后台同步队列的最大并行任务数
     
     @classmethod
     def validate(cls):

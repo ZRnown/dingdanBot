@@ -18,6 +18,7 @@ class OrderAPI:
         self.auth_token = Config.API_AUTHORIZATION_TOKEN
         self.cookie = Config.API_COOKIE
         self.page_size = Config.PAGE_SIZE
+        self.max_workers = Config.SHEQU_MAX_WORKERS
         
         self.headers = {
             'Accept': 'application/json, text/plain, */*',
@@ -181,7 +182,7 @@ class OrderAPI:
         all_orders = []
         
         # 使用线程池并行处理多个第三方
-        with ThreadPoolExecutor(max_workers=min(len(shequ_ids), 10)) as executor:
+        with ThreadPoolExecutor(max_workers=min(len(shequ_ids), self.max_workers)) as executor:
             # 提交所有任务
             future_to_shequ = {
                 executor.submit(self._get_shequ_orders, shequ_id, days, cutoff_date, today_date): shequ_id
@@ -256,7 +257,7 @@ class OrderAPI:
         all_new_orders = []
         
         # 使用线程池并行处理多个第三方
-        with ThreadPoolExecutor(max_workers=min(len(shequ_ids), 10)) as executor:
+        with ThreadPoolExecutor(max_workers=min(len(shequ_ids), self.max_workers)) as executor:
             # 提交所有任务
             future_to_shequ = {
                 executor.submit(self._get_shequ_new_orders, shequ_id, last_order_id, days, cutoff_date, today_date): shequ_id
