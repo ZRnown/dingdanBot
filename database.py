@@ -1,7 +1,6 @@
 import sqlite3
 import json
 import time
-import logging
 from datetime import datetime
 from typing import List, Dict, Optional
 from config import Config
@@ -175,7 +174,7 @@ class Database:
             conn.commit()
             return True
         except Exception as e:
-            logging.error(f"插入订单失败: {e}")
+            print(f"插入订单失败: {e}")
             conn.rollback()
             return False
         finally:
@@ -194,7 +193,7 @@ class Database:
             if self.insert_order(order):
                 count += 1
         if skipped > 0:
-            logging.info(f"跳过 {skipped} 个已存在的订单")
+            print(f"跳过 {skipped} 个已存在的订单")
         return count
     
     def normalize_url(self, url: str) -> str:
@@ -265,7 +264,7 @@ class Database:
                 }
             return None
         except Exception as e:
-            logging.error(f"查询订单失败: {e}")
+            print(f"查询订单失败: {e}")
             return None
         finally:
             conn.close()
@@ -280,7 +279,7 @@ class Database:
             cursor.execute('SELECT COUNT(*) FROM orders WHERE created_date = ?', (today,))
             return cursor.fetchone()[0]
         except Exception as e:
-            logging.error(f"查询订单数量失败: {e}")
+            print(f"查询订单数量失败: {e}")
             return 0
         finally:
             conn.close()
@@ -294,7 +293,7 @@ class Database:
             cursor.execute('SELECT 1 FROM orders WHERE order_id = ? LIMIT 1', (order_id,))
             return cursor.fetchone() is not None
         except Exception as e:
-            logging.error(f"检查订单失败: {e}")
+            print(f"检查订单失败: {e}")
             return False
         finally:
             conn.close()
@@ -319,7 +318,7 @@ class Database:
                 }
             return None
         except Exception as e:
-            logging.error(f"获取订单状态失败: {e}")
+            print(f"获取订单状态失败: {e}")
             return None
         finally:
             conn.close()
@@ -333,7 +332,7 @@ class Database:
             refund_keywords = ['退单中', '已退款', '已退单', '退款中', '退单']
             for keyword in refund_keywords:
                 if keyword in logs_lower:
-                    logging.info(f"检测到退单关键词: {keyword}")
+                    print(f"检测到退单关键词: {keyword}")
                     return True
         
         # 检查order_status字段（如果状态值是特定的数字）
@@ -342,7 +341,7 @@ class Database:
         # 常见的退单状态值可能是负数或特定数字，根据实际情况调整
         # 如果order_status是负数，可能是退单状态
         if order_status and order_status < 0:
-            logging.info(f"检测到退单状态码: {order_status}")
+            print(f"检测到退单状态码: {order_status}")
             return True
         
         return False
@@ -357,7 +356,7 @@ class Database:
             rows = cursor.fetchall()
             return [row[0] for row in rows]
         except Exception as e:
-            logging.error(f"获取选中的第三方失败: {e}")
+            print(f"获取选中的第三方失败: {e}")
             return []
         finally:
             conn.close()
@@ -372,7 +371,7 @@ class Database:
             count = cursor.fetchone()[0]
             return count == 0  # 如果没有选中任何第三方，则获取全部
         except Exception as e:
-            logging.error(f"检查第三方设置失败: {e}")
+            print(f"检查第三方设置失败: {e}")
             return True  # 默认获取全部
         finally:
             conn.close()
@@ -400,7 +399,7 @@ class Database:
             conn.commit()
             return True
         except Exception as e:
-            logging.error(f"更新第三方设置失败: {e}")
+            print(f"更新第三方设置失败: {e}")
             conn.rollback()
             return False
         finally:
@@ -416,53 +415,35 @@ class Database:
         try:
             now = int(time.time())
             last_synced_at = now if initial_attempts > 0 else 0
-            # 先尝试更新已存在的任务
-            cursor.execute(
-                '''
-                UPDATE order_sync_tasks
-                SET chat_id = ?, message_id = ?, attempts = ?, max_attempts = ?,
-                    last_synced_at = ?, douyin_url = ?, shequ_id = ?, order_sn = ?,
+            cursor.execute('''
+                INSERT INTO order_sync_tasks (order_id, chat_id, message_id, attempts, max_attempts,
+                                              last_synced_at, douyin_url, shequ_id, order_sn, status_text, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)
+                ON CONFLICT(order_id) DO UPDATE SET
+                    chat_id = excluded.chat_id,
+                    message_id = excluded.message_id,
+                    attempts = excluded.attempts,
+                    max_attempts = excluded.max_attempts,
+                    last_synced_at = excluded.last_synced_at,
+                    douyin_url = excluded.douyin_url,
+                    shequ_id = excluded.shequ_id,
+                    order_sn = excluded.order_sn,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE order_id = ?
-                ''',
-                (
-                    chat_id,
-                    message_id,
-                    initial_attempts,
-                    max_attempts,
-                    last_synced_at,
-                    douyin_url,
-                    shequ_id,
-                    order_sn,
-                    order_id,
-                ),
-            )
-
-            # 如果没有行被更新，说明是新任务，执行插入
-            if cursor.rowcount == 0:
-                cursor.execute(
-                    '''
-                    INSERT INTO order_sync_tasks (
-                        order_id, chat_id, message_id, attempts, max_attempts,
-                        last_synced_at, douyin_url, shequ_id, order_sn, status_text, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    ''',
-                    (
-                        order_id,
-                        chat_id,
-                        message_id,
-                        initial_attempts,
-                        max_attempts,
-                        last_synced_at,
-                        douyin_url,
-                        shequ_id,
-                        order_sn,
-                    ),
-                )
+            ''', (
+                order_id,
+                chat_id,
+                message_id,
+                initial_attempts,
+                max_attempts,
+                last_synced_at,
+                douyin_url,
+                shequ_id,
+                order_sn
+            ))
             conn.commit()
             return True
         except Exception as e:
-            logging.error(f"添加同步任务失败: {e}")
+            print(f"添加同步任务失败: {e}")
             conn.rollback()
             return False
         finally:
@@ -496,7 +477,7 @@ class Database:
                 }
             return None
         except Exception as e:
-            logging.error(f"获取同步任务失败: {e}")
+            print(f"获取同步任务失败: {e}")
             return None
         finally:
             conn.close()
@@ -531,7 +512,7 @@ class Database:
                 })
             return tasks
         except Exception as e:
-            logging.error(f"获取需要同步的任务失败: {e}")
+            print(f"获取需要同步的任务失败: {e}")
             return []
         finally:
             conn.close()
@@ -549,7 +530,7 @@ class Database:
             ''', (attempts, last_synced_at, status_text, order_id))
             conn.commit()
         except Exception as e:
-            logging.error(f"更新同步任务失败: {e}")
+            print(f"更新同步任务失败: {e}")
             conn.rollback()
         finally:
             conn.close()
@@ -563,7 +544,7 @@ class Database:
             cursor.execute('DELETE FROM order_sync_tasks WHERE order_id = ?', (order_id,))
             conn.commit()
         except Exception as e:
-            logging.error(f"删除同步任务失败: {e}")
+            print(f"删除同步任务失败: {e}")
             conn.rollback()
         finally:
             conn.close()
@@ -583,11 +564,11 @@ class Database:
             conn.commit()
             
             if deleted_count > 0:
-                logging.info(f"已删除 {deleted_count} 个超过 {days} 天的订单")
+                print(f"已删除 {deleted_count} 个超过 {days} 天的订单")
             
             return deleted_count
         except Exception as e:
-            logging.error(f"删除过期订单失败: {e}")
+            print(f"删除过期订单失败: {e}")
             import traceback
             traceback.print_exc()
             conn.rollback()
@@ -615,11 +596,11 @@ class Database:
             conn.commit()
             
             if deleted_count > 0:
-                logging.info(f"已删除 {deleted_count} 个不属于选中第三方的订单")
+                print(f"已删除 {deleted_count} 个不属于选中第三方的订单")
             
             return deleted_count
         except Exception as e:
-            logging.error(f"删除订单失败: {e}")
+            print(f"删除订单失败: {e}")
             import traceback
             traceback.print_exc()
             conn.rollback()

@@ -2,7 +2,6 @@ import requests
 import json
 import time
 import random
-import logging
 from datetime import datetime
 from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -71,22 +70,18 @@ class OrderAPI:
                 else:
                     if attempt < max_retries - 1:
                         wait_time = (attempt + 1) * 2  # 递增等待时间：2秒、4秒、6秒...
-                        logging.warning(
-                            f"获取订单失败: HTTP {response.status_code}，{wait_time}秒后重试 (尝试 {attempt + 1}/{max_retries})"
-                        )
+                        print(f"获取订单失败: HTTP {response.status_code}，{wait_time}秒后重试 (尝试 {attempt + 1}/{max_retries})")
                         time.sleep(wait_time)
                     else:
-                        logging.error(f"获取订单失败: HTTP {response.status_code}，已达到最大重试次数")
+                        print(f"获取订单失败: HTTP {response.status_code}，已达到最大重试次数")
                         return None
             except Exception as e:
                 if attempt < max_retries - 1:
                     wait_time = (attempt + 1) * 2
-                    logging.warning(
-                        f"获取订单异常: {e}，{wait_time}秒后重试 (尝试 {attempt + 1}/{max_retries})"
-                    )
+                    print(f"获取订单异常: {e}，{wait_time}秒后重试 (尝试 {attempt + 1}/{max_retries})")
                     time.sleep(wait_time)
                 else:
-                    logging.error(f"获取订单异常: {e}，已达到最大重试次数")
+                    print(f"获取订单异常: {e}，已达到最大重试次数")
                     return None
         
         return None
@@ -117,7 +112,7 @@ class OrderAPI:
                         return result.get('info', [])
             return []
         except Exception as e:
-            logging.error(f"获取第三方列表异常: {e}")
+            print(f"获取第三方列表异常: {e}")
             return []
     
     def _get_shequ_orders(self, shequ_id: Optional[int], days: int, cutoff_date, today_date) -> List[Dict]:
@@ -130,14 +125,14 @@ class OrderAPI:
             result = self.get_orders_page(page=page, shequ_id=shequ_id)
             
             if not result:
-                logging.warning(f"[{shequ_name}] 获取第 {page} 页失败，已重试10次，跳过该页继续")
+                print(f"[{shequ_name}] 获取第 {page} 页失败，已重试10次，跳过该页继续")
                 page += 1
                 if page > 100:
                     break
                 continue
             
             if result.get('error') != 0:
-                logging.warning(f"[{shequ_name}] 获取第 {page} 页返回错误: {result.get('error')}")
+                print(f"[{shequ_name}] 获取第 {page} 页返回错误: {result.get('error')}")
                 page += 1
                 if page > 100:
                     break
@@ -167,7 +162,7 @@ class OrderAPI:
             
             page += 1
         
-        logging.info(f"[{shequ_name}] 获取完成，共 {len(orders)} 个订单")
+        print(f"[{shequ_name}] 获取完成，共 {len(orders)} 个订单")
         return orders
     
     def get_recent_orders(self, days: int = 2, shequ_ids: List[int] = None) -> List[Dict]:
@@ -176,7 +171,7 @@ class OrderAPI:
         cutoff_date = (datetime.now() - timedelta(days=days)).date()
         today_date = datetime.now().date()
         
-        logging.info(f"开始并行获取最近 {days} 天的订单（从 {cutoff_date} 到 {today_date}）...")
+        print(f"开始并行获取最近 {days} 天的订单（从 {cutoff_date} 到 {today_date}）...")
         
         # 如果没有指定第三方ID，获取全部
         if shequ_ids is None or len(shequ_ids) == 0:
@@ -200,9 +195,9 @@ class OrderAPI:
                     all_orders.extend(orders)
                 except Exception as e:
                     shequ_name = f"第三方 {shequ_id}" if shequ_id else "全部"
-                    logging.error(f"[{shequ_name}] 获取订单时发生异常: {e}")
+                    print(f"[{shequ_name}] 获取订单时发生异常: {e}")
         
-        logging.info(f"总共获取到 {len(all_orders)} 个最近 {days} 天的订单")
+        print(f"总共获取到 {len(all_orders)} 个最近 {days} 天的订单")
         return all_orders
     
     def get_all_today_orders(self) -> List[Dict]:
@@ -275,9 +270,8 @@ class OrderAPI:
                     all_new_orders.extend(orders)
                 except Exception as e:
                     shequ_name = f"第三方 {shequ_id}" if shequ_id else "全部"
-                    logging.error(f"[{shequ_name}] 获取新订单时发生异常: {e}")
+                    print(f"[{shequ_name}] 获取新订单时发生异常: {e}")
         
-        logging.info(f"总共获取到 {len(all_new_orders)} 个新订单")
         return all_new_orders
     
     def get_order_detail(self, order_id: int) -> Optional[Dict]:
@@ -360,7 +354,7 @@ class OrderAPI:
                 if response.status_code == 200:
                     result = response.json()
                     if result.get('error') == 0:
-                        logging.info(f"订单 {order_id} 同步成功")
+                        print(f"订单 {order_id} 同步成功")
                         return {
                             'success': True,
                             'attempt': attempt + 1,
@@ -372,12 +366,10 @@ class OrderAPI:
                             # 随机等待3-5分钟
                             wait_seconds = random.randint(retry_interval_min * 60, retry_interval_max * 60)
                             wait_minutes = wait_seconds / 60
-                            logging.warning(
-                                f"订单 {order_id} 同步失败: {result}，{wait_minutes:.1f}分钟后重试 (尝试 {attempt + 1}/{max_retries})"
-                            )
+                            print(f"订单 {order_id} 同步失败: {result}，{wait_minutes:.1f}分钟后重试 (尝试 {attempt + 1}/{max_retries})")
                             time.sleep(wait_seconds)
                         else:
-                            logging.error(f"订单 {order_id} 同步失败: {result}，已达到最大重试次数")
+                            print(f"订单 {order_id} 同步失败: {result}，已达到最大重试次数")
                             return {
                                 'success': False,
                                 'attempt': attempt + 1,
@@ -388,12 +380,10 @@ class OrderAPI:
                     if attempt < max_retries - 1:
                         wait_seconds = random.randint(retry_interval_min * 60, retry_interval_max * 60)
                         wait_minutes = wait_seconds / 60
-                        logging.warning(
-                            f"订单 {order_id} 同步失败: HTTP {response.status_code}，{wait_minutes:.1f}分钟后重试 (尝试 {attempt + 1}/{max_retries})"
-                        )
+                        print(f"订单 {order_id} 同步失败: HTTP {response.status_code}，{wait_minutes:.1f}分钟后重试 (尝试 {attempt + 1}/{max_retries})")
                         time.sleep(wait_seconds)
                     else:
-                        logging.error(f"订单 {order_id} 同步失败: HTTP {response.status_code}，已达到最大重试次数")
+                        print(f"订单 {order_id} 同步失败: HTTP {response.status_code}，已达到最大重试次数")
                         return {
                             'success': False,
                             'attempt': attempt + 1,
@@ -404,12 +394,10 @@ class OrderAPI:
                 if attempt < max_retries - 1:
                     wait_seconds = random.randint(retry_interval_min * 60, retry_interval_max * 60)
                     wait_minutes = wait_seconds / 60
-                    logging.warning(
-                        f"同步订单 {order_id} 异常: {e}，{wait_minutes:.1f}分钟后重试 (尝试 {attempt + 1}/{max_retries})"
-                    )
+                    print(f"同步订单 {order_id} 异常: {e}，{wait_minutes:.1f}分钟后重试 (尝试 {attempt + 1}/{max_retries})")
                     time.sleep(wait_seconds)
                 else:
-                    logging.error(f"同步订单 {order_id} 异常: {e}，已达到最大重试次数")
+                    print(f"同步订单 {order_id} 异常: {e}，已达到最大重试次数")
                     return {
                         'success': False,
                         'attempt': attempt + 1,
@@ -451,9 +439,9 @@ class OrderAPI:
                     if info:
                         return info[0]
             else:
-                logging.error(f"获取订单 {order_id} 状态失败: HTTP {response.status_code}")
+                print(f"获取订单 {order_id} 状态失败: HTTP {response.status_code}")
         except Exception as e:
-            logging.error(f"获取订单 {order_id} 状态异常: {e}")
+            print(f"获取订单 {order_id} 状态异常: {e}")
         return None
     
     def extract_refund_status(self, order_detail: Optional[Dict]) -> Optional[str]:

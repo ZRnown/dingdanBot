@@ -2,7 +2,6 @@ import re
 import asyncio
 import json
 import time
-import logging
 from datetime import datetime
 from typing import Dict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -46,87 +45,53 @@ class TelegramBot:
         chat_id = update.message.chat_id
         message_id = update.message.message_id
         
-        logging.info(f"收到消息: {message_text[:100]}... (来自用户 {chat_id})")
+        print(f"收到消息: {message_text[:100]}... (来自用户 {chat_id})")
         
         douyin_urls = self.extract_douyin_urls(message_text)
-        
-        # 提取可能的订单ID（纯数字，长度>=6）
-        id_candidates = set()
-        for m in re.findall(r"\b\d{6,}\b", message_text):
-            try:
-                id_candidates.add(int(m))
-            except ValueError:
-                continue
-        
-        orders_by_id: Dict[int, Dict] = {}
-        
-        # 先根据链接找订单
-        for url in douyin_urls:
-            logging.info(f"找到抖音链接: {url}")
-            order = self.db.find_order_by_douyin_url(url)
-            if not order:
-                logging.info(f"未找到链接 {url} 对应的订单")
-                continue
-            oid = order.get("order_id")
-            if oid:
-                orders_by_id[oid] = order
-        
-        # 再根据订单ID找订单
-        for oid in id_candidates:
-            if oid in orders_by_id:
-                continue
-            order = self.db.find_order_by_id(oid)
-            if not order:
-                detail = self.order_api.get_order_status_by_id(oid)
-                if detail:
-                    self.db.insert_order(detail)
-                    order = self.db.find_order_by_id(oid)
-            if order:
-                orders_by_id[oid] = order
-            else:
-                logging.info(f"未找到订单ID {oid} 对应的订单")
-        
-        if not orders_by_id:
+        if not douyin_urls:
             return
         
         selected_shequ_ids = set(self.db.get_selected_shequ_ids())
         is_all_selected = self.db.is_all_shequ_selected()
         
-        for order in orders_by_id.values():
-            order_id = order.get("order_id")
-            order_shequ_id = order.get("shequ_id", 0)
-            logging.info(f"处理订单 ID: {order_id}, 第三方ID: {order_shequ_id}")
-            
-            if not is_all_selected and selected_shequ_ids and order_shequ_id not in selected_shequ_ids:
-                logging.info(f"订单 {order_id} 不属于选中的第三方分类，跳过处理")
+        for url in douyin_urls:
+            print(f"找到抖音链接: {url}")
+            order = self.db.find_order_by_douyin_url(url)
+            if not order:
+                print(f"未找到链接 {url} 对应的订单")
                 continue
             
-            # 检查是否已经是退单相关状态，如果是，直接回复并不入队
-            refund_status = self.order_api.extract_refund_status({"logs": order.get("logs", "")})
-            if refund_status:
+            order_id = order.get('order_id')
+            order_shequ_id = order.get('shequ_id', 0)
+            print(f"找到订单 ID: {order_id}, 第三方ID: {order_shequ_id}")
+            
+            if not is_all_selected and selected_shequ_ids and order_shequ_id not in selected_shequ_ids:
+                print(f"订单 {order_id} 不属于选中的第三方分类，跳过处理")
                 await update.message.reply_text(
-                    f"订单{refund_status}",
+                    "订单不属于当前选中的第三方分类，已跳过处理。",
                     reply_to_message_id=message_id
                 )
                 continue
             
-            # 加入后台同步队列
+            if self.db.is_refund_status(order):
+                print(f"订单 {order_id} 处于退单状态，跳过同步")
+                # 不再回复中间状态，只在最终状态时通知
+                continue
+            
             self.db.add_sync_task(
                 order_id=order_id,
                 chat_id=chat_id,
                 message_id=message_id,
                 initial_attempts=0,
                 max_attempts=0,
-                douyin_url=order.get("douyin_url", ""),
-                shequ_id=order.get("shequ_id", 0),
-                order_sn=order.get("order_sn", "")
+                douyin_url=order.get('douyin_url', ''),
+                shequ_id=order.get('shequ_id', 0),
+                order_sn=order.get('order_sn', '')
             )
-            logging.info(f"订单 {order_id} 已加入同步队列")
-
+            
             task = self.db.get_sync_task(order_id)
             if task:
                 await self._process_single_sync_task(context.bot, task)
-
 
     async def handle_set_shequ_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /setshequ 命令 - 显示第三方设置界面"""
@@ -201,6 +166,8 @@ class TelegramBot:
             is_all_selected = self.db.is_all_shequ_selected()
             
             shequ_ids = None if is_all_selected else selected_ids
+            await query.edit_message_text("✅ 设置已保存。\n正在获取对应第三方订单...")
+            
             try:
                 # 获取近两天的订单
                 orders = self.order_api.get_recent_orders(days=2, shequ_ids=shequ_ids)
@@ -221,14 +188,16 @@ class TelegramBot:
                     if shequ_ids:
                         cleanup_count = self.db.delete_orders_by_shequ_ids(shequ_ids)
                         if cleanup_count > 0:
-                            logging.info(f"已清理 {cleanup_count} 个不属于选中第三方的订单")
+                            print(f"已清理 {cleanup_count} 个不属于选中第三方的订单")
                     
                     success_msg = f"✅ 设置已保存。\n已获取对应第三方订单（共{count}条）"
                     await query.edit_message_text(success_msg)
                 else:
                     await query.edit_message_text("✅ 设置已保存。\n已获取对应第三方订单（共0条）")
             except Exception as e:
-                logging.error(f"获取订单失败: {e}")
+                print(f"获取订单失败: {e}")
+                import traceback
+                traceback.print_exc()
                 await query.edit_message_text(f"✅ 设置已保存。\n获取对应第三方订单失败：{str(e)}")
             
             return
@@ -280,7 +249,7 @@ class TelegramBot:
                 selected_ids_list = [int(sid) for sid in selected_ids]
                 deleted_count = self.db.delete_orders_by_shequ_ids(selected_ids_list)
                 if deleted_count > 0:
-                    logging.info(f"切换分类后，已清理 {deleted_count} 个不属于选中第三方的订单")
+                    print(f"切换分类后，已清理 {deleted_count} 个不属于选中第三方的订单")
         
         # 重新显示设置界面（两列布局）
         shequ_list = self.order_api.get_shequ_list()
@@ -351,18 +320,16 @@ class TelegramBot:
                 first=self.sync_interval
             )
         else:
-            logging.warning("警告: JobQueue 不可用，后台同步队列将不会自动轮询。")
+            print("警告: JobQueue 不可用，后台同步队列将不会自动轮询。")
         
-        logging.info("Telegram Bot 启动中...")
+        print("Telegram Bot 启动中...")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
 
     async def process_sync_queue(self, context: ContextTypes.DEFAULT_TYPE):
         """后台同步队列处理"""
         tasks = self.db.get_due_sync_tasks(self.sync_interval)
         if not tasks:
-            logging.info("后台同步队列为空，本轮无需同步")
             return
-        logging.info(f"后台同步队列本轮共有 {len(tasks)} 个任务需要处理")
         
         bot = context.bot
         for task in tasks:
@@ -373,12 +340,12 @@ class TelegramBot:
         order_id = task['order_id']
         attempts_before = task.get('attempts', 0)
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logging.info(f"[{ts}] 后台同步订单 {order_id}，已尝试 {attempts_before} 次")
+        print(f"[{ts}] 后台同步订单 {order_id}，已尝试 {attempts_before} 次")
         
         try:
             result = self.order_api.sync_order(order_id, max_retries=1, retry_interval_min=0, retry_interval_max=0)
         except Exception as e:
-            logging.error(f"同步订单 {order_id} 异常: {e}")
+            print(f"同步订单 {order_id} 异常: {e}")
             result = {'message': str(e)}
         
         order_detail = self.order_api.get_order_status_by_id(order_id)
@@ -393,12 +360,12 @@ class TelegramBot:
         # 在后台输出当前状态信息
         ts_done = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if refund_status:
-            logging.info(f"[{ts_done}] 订单 {order_id} 当前状态: {refund_status}（同步第 {attempts} 次）")
+            print(f"[{ts_done}] 订单 {order_id} 当前状态: {refund_status}（同步第 {attempts} 次）")
         elif isinstance(result, dict) and result.get('success'):
-            logging.info(f"[{ts_done}] 订单 {order_id} 同步成功（第 {attempts} 次），状态未进入退单/退款。")
+            print(f"[{ts_done}] 订单 {order_id} 同步成功（第 {attempts} 次），状态未进入退单/退款。")
         else:
             msg = (result.get('message') if isinstance(result, dict) else "未知错误")
-            logging.warning(f"[{ts_done}] 订单 {order_id} 同步失败（第 {attempts} 次），状态信息: {msg}")
+            print(f"[{ts_done}] 订单 {order_id} 同步失败（第 {attempts} 次），状态信息: {msg}")
         
         if refund_status:
             await self._notify_user(
@@ -418,6 +385,6 @@ class TelegramBot:
                 reply_to_message_id=message_id
             )
         except Exception as e:
-            logging.error(f"发送通知失败: {e}")
+            print(f"发送通知失败: {e}")
             await bot.send_message(chat_id=chat_id, text=text)
 

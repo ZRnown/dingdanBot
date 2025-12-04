@@ -148,4 +148,3 @@ sudo systemctl status kefubot
 
 MIT License
 
-# dingdanBot
