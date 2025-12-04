@@ -415,31 +415,54 @@ class Database:
         try:
             now = int(time.time())
             last_synced_at = now if initial_attempts > 0 else 0
-            cursor.execute('''
-                INSERT INTO order_sync_tasks (order_id, chat_id, message_id, attempts, max_attempts,
-                                              last_synced_at, douyin_url, shequ_id, order_sn, status_text, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)
-                ON CONFLICT(order_id) DO UPDATE SET
-                    chat_id = excluded.chat_id,
-                    message_id = excluded.message_id,
-                    attempts = excluded.attempts,
-                    max_attempts = excluded.max_attempts,
-                    last_synced_at = excluded.last_synced_at,
-                    douyin_url = excluded.douyin_url,
-                    shequ_id = excluded.shequ_id,
-                    order_sn = excluded.order_sn,
-                    updated_at = CURRENT_TIMESTAMP
-            ''', (
-                order_id,
-                chat_id,
-                message_id,
-                initial_attempts,
-                max_attempts,
-                last_synced_at,
-                douyin_url,
-                shequ_id,
-                order_sn
-            ))
+            # 由于部分系统SQLite版本较老，不支持 ON CONFLICT 语法，这里改为“先查再更新/插入”的方式
+            cursor.execute('SELECT 1 FROM order_sync_tasks WHERE order_id = ?', (order_id,))
+            exists = cursor.fetchone() is not None
+
+            if exists:
+                # 更新已有任务（重置 attempts/last_synced_at 等）
+                cursor.execute('''
+                    UPDATE order_sync_tasks
+                    SET chat_id = ?,
+                        message_id = ?,
+                        attempts = ?,
+                        max_attempts = ?,
+                        last_synced_at = ?,
+                        douyin_url = ?,
+                        shequ_id = ?,
+                        order_sn = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE order_id = ?
+                ''', (
+                    chat_id,
+                    message_id,
+                    initial_attempts,
+                    max_attempts,
+                    last_synced_at,
+                    douyin_url,
+                    shequ_id,
+                    order_sn,
+                    order_id,
+                ))
+            else:
+                # 新建任务
+                cursor.execute('''
+                    INSERT INTO order_sync_tasks (
+                        order_id, chat_id, message_id, attempts, max_attempts,
+                        last_synced_at, douyin_url, shequ_id, order_sn, status_text, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)
+                ''', (
+                    order_id,
+                    chat_id,
+                    message_id,
+                    initial_attempts,
+                    max_attempts,
+                    last_synced_at,
+                    douyin_url,
+                    shequ_id,
+                    order_sn,
+                ))
             conn.commit()
             return True
         except Exception as e:
