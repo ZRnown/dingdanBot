@@ -416,31 +416,49 @@ class Database:
         try:
             now = int(time.time())
             last_synced_at = now if initial_attempts > 0 else 0
-            cursor.execute('''
-                INSERT INTO order_sync_tasks (order_id, chat_id, message_id, attempts, max_attempts,
-                                              last_synced_at, douyin_url, shequ_id, order_sn, status_text, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)
-                ON CONFLICT(order_id) DO UPDATE SET
-                    chat_id = excluded.chat_id,
-                    message_id = excluded.message_id,
-                    attempts = excluded.attempts,
-                    max_attempts = excluded.max_attempts,
-                    last_synced_at = excluded.last_synced_at,
-                    douyin_url = excluded.douyin_url,
-                    shequ_id = excluded.shequ_id,
-                    order_sn = excluded.order_sn,
+            # 先尝试更新已存在的任务
+            cursor.execute(
+                '''
+                UPDATE order_sync_tasks
+                SET chat_id = ?, message_id = ?, attempts = ?, max_attempts = ?,
+                    last_synced_at = ?, douyin_url = ?, shequ_id = ?, order_sn = ?,
                     updated_at = CURRENT_TIMESTAMP
-            ''', (
-                order_id,
-                chat_id,
-                message_id,
-                initial_attempts,
-                max_attempts,
-                last_synced_at,
-                douyin_url,
-                shequ_id,
-                order_sn
-            ))
+                WHERE order_id = ?
+                ''',
+                (
+                    chat_id,
+                    message_id,
+                    initial_attempts,
+                    max_attempts,
+                    last_synced_at,
+                    douyin_url,
+                    shequ_id,
+                    order_sn,
+                    order_id,
+                ),
+            )
+
+            # 如果没有行被更新，说明是新任务，执行插入
+            if cursor.rowcount == 0:
+                cursor.execute(
+                    '''
+                    INSERT INTO order_sync_tasks (
+                        order_id, chat_id, message_id, attempts, max_attempts,
+                        last_synced_at, douyin_url, shequ_id, order_sn, status_text, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ''',
+                    (
+                        order_id,
+                        chat_id,
+                        message_id,
+                        initial_attempts,
+                        max_attempts,
+                        last_synced_at,
+                        douyin_url,
+                        shequ_id,
+                        order_sn,
+                    ),
+                )
             conn.commit()
             return True
         except Exception as e:

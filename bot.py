@@ -121,7 +121,8 @@ class TelegramBot:
                 shequ_id=order.get("shequ_id", 0),
                 order_sn=order.get("order_sn", "")
             )
-            
+            logging.info(f"订单 {order_id} 已加入同步队列")
+
             task = self.db.get_sync_task(order_id)
             if task:
                 await self._process_single_sync_task(context.bot, task)
@@ -200,8 +201,6 @@ class TelegramBot:
             is_all_selected = self.db.is_all_shequ_selected()
             
             shequ_ids = None if is_all_selected else selected_ids
-            await query.edit_message_text("✅ 设置已保存。\n正在获取对应第三方订单...")
-            
             try:
                 # 获取近两天的订单
                 orders = self.order_api.get_recent_orders(days=2, shequ_ids=shequ_ids)
@@ -361,7 +360,9 @@ class TelegramBot:
         """后台同步队列处理"""
         tasks = self.db.get_due_sync_tasks(self.sync_interval)
         if not tasks:
+            logging.info("后台同步队列为空，本轮无需同步")
             return
+        logging.info(f"后台同步队列本轮共有 {len(tasks)} 个任务需要处理")
         
         bot = context.bot
         for task in tasks:
