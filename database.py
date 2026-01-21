@@ -60,6 +60,14 @@ class Database:
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_order_id ON orders(order_id)
         ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_order_sn ON orders(order_sn)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_other_order_sn ON orders(other_order_sn)
+        ''')
         
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_created_date ON orders(created_date)
@@ -209,6 +217,29 @@ class Database:
             if not url.endswith('/'):
                 url += '/'
         return url
+
+    def _row_to_order(self, row) -> Optional[Dict]:
+        """将数据库行转换为订单字典"""
+        if not row:
+            return None
+        return {
+            'order_id': row[0],
+            'create_at': row[1],
+            'user_name': row[2],
+            'user_id': row[3],
+            'goods_id': row[4],
+            'goods_name': row[5],
+            'order_sn': row[6],
+            'other_order_sn': row[7],
+            'order_status': row[8],
+            'order_amount': row[9],
+            'price': row[10],
+            'params': row[11],
+            'douyin_url': row[12],
+            'logs': row[13],
+            'created_date': row[14],
+            'shequ_id': row[15] if len(row) > 15 else 0
+        }
     
     def find_order_by_douyin_url(self, url: str) -> Optional[Dict]:
         """根据抖音链接查找订单"""
@@ -244,26 +275,58 @@ class Database:
             ))
             
             row = cursor.fetchone()
-            if row:
-                return {
-                    'order_id': row[0],
-                    'create_at': row[1],
-                    'user_name': row[2],
-                    'user_id': row[3],
-                    'goods_id': row[4],
-                    'goods_name': row[5],
-                    'order_sn': row[6],
-                    'other_order_sn': row[7],
-                    'order_status': row[8],
-                    'order_amount': row[9],
-                    'price': row[10],
-                    'params': row[11],
-                    'douyin_url': row[12],
-                    'logs': row[13],
-                    'created_date': row[14],
-                    'shequ_id': row[15] if len(row) > 15 else 0
-                }
+            return self._row_to_order(row)
+        except Exception as e:
+            log(f"查询订单失败: {e}")
             return None
+        finally:
+            conn.close()
+
+    def find_order_by_order_id(self, order_id: int) -> Optional[Dict]:
+        """根据订单ID查找订单"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute('''
+                SELECT order_id, create_at, user_name, user_id, goods_id, goods_name,
+                       order_sn, other_order_sn, order_status, order_amount, price,
+                       params, douyin_url, logs, created_date, shequ_id
+                FROM orders
+                WHERE order_id = ?
+                ORDER BY create_at DESC
+                LIMIT 1
+            ''', (order_id,))
+            row = cursor.fetchone()
+            return self._row_to_order(row)
+        except Exception as e:
+            log(f"查询订单失败: {e}")
+            return None
+        finally:
+            conn.close()
+
+    def find_order_by_order_sn(self, order_sn: str) -> Optional[Dict]:
+        """根据订单号（OrderSN/OtherOrderSN）查找订单"""
+        if not order_sn:
+            return None
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            clean_sn = str(order_sn).strip()
+            if not clean_sn:
+                return None
+            cursor.execute('''
+                SELECT order_id, create_at, user_name, user_id, goods_id, goods_name,
+                       order_sn, other_order_sn, order_status, order_amount, price,
+                       params, douyin_url, logs, created_date, shequ_id
+                FROM orders
+                WHERE order_sn = ? OR other_order_sn = ?
+                ORDER BY create_at DESC
+                LIMIT 1
+            ''', (clean_sn, clean_sn))
+            row = cursor.fetchone()
+            return self._row_to_order(row)
         except Exception as e:
             log(f"查询订单失败: {e}")
             return None
@@ -631,4 +694,3 @@ class Database:
             return 0
         finally:
             conn.close()
-

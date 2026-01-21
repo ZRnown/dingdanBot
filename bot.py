@@ -3,7 +3,7 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 from database import Database
@@ -26,6 +26,9 @@ class TelegramBot:
             r'https?://v\.douyin\.com/[A-Za-z0-9_-]+/?',
             re.IGNORECASE
         )
+        self.url_pattern = re.compile(r'https?://\S+', re.IGNORECASE)
+        self.order_id_pattern = re.compile(r'(?<!\d)\d{6,12}(?!\d)')
+        self.order_sn_pattern = re.compile(r'[A-Za-z0-9_-]{8,}')
     
     def extract_douyin_urls(self, text: str) -> list:
         """从文本中提取所有抖音链接"""
@@ -38,6 +41,89 @@ class TelegramBot:
             if normalized:
                 cleaned_urls.append(normalized)
         return cleaned_urls
+
+    def extract_order_identifiers(self, text: str):
+        """从文本中提取订单ID和订单号"""
+        if not text:
+            return [], []
+        cleaned_text = self.url_pattern.sub(' ', text)
+        numeric_tokens = self.order_id_pattern.findall(cleaned_text)
+        order_ids = []
+        seen_numeric = set()
+        for token in numeric_tokens:
+            if token in seen_numeric:
+                continue
+            seen_numeric.add(token)
+            try:
+                order_ids.append(int(token))
+            except ValueError:
+                continue
+
+        raw_tokens = self.order_sn_pattern.findall(cleaned_text)
+        order_sns = []
+        seen_sns = set()
+        for token in raw_tokens:
+            if token.isdigit():
+                continue
+            if not any(ch.isdigit() for ch in token):
+                continue
+            if token in seen_sns:
+                continue
+            seen_sns.add(token)
+            order_sns.append(token)
+
+        return order_ids, order_sns
+
+    async def _fetch_order_by_id(self, order_id: int) -> Optional[Dict]:
+        """从API获取订单详情并写入数据库"""
+        order_detail = await asyncio.to_thread(self.order_api.get_order_status_by_id, order_id)
+        if order_detail:
+            self.db.insert_order(order_detail)
+            return self.db.find_order_by_order_id(order_id)
+        return None
+
+    async def _enqueue_order_sync(self, update: Update, context: ContextTypes.DEFAULT_TYPE, order: Dict,
+                                  chat_id: int, message_id: int, selected_shequ_ids: set,
+                                  is_all_selected: bool, processed_order_ids: set, source: str):
+        order_id = order.get('order_id')
+        if not order_id:
+            return False
+        if order_id in processed_order_ids:
+            log(f"订单 {order_id} 已处理过，跳过 (来源: {source})")
+            return False
+        processed_order_ids.add(order_id)
+
+        order_shequ_id = order.get('shequ_id', 0)
+        log(f"找到订单 ID: {order_id}, 第三方ID: {order_shequ_id} (来源: {source})")
+
+        if not is_all_selected and selected_shequ_ids and order_shequ_id not in selected_shequ_ids:
+            log(f"订单 {order_id} 不属于选中的第三方分类，跳过处理")
+            await update.message.reply_text(
+                "订单不属于当前选中的第三方分类，已跳过处理。",
+                reply_to_message_id=message_id
+            )
+            return False
+
+        if self.db.is_refund_status(order):
+            log(f"订单 {order_id} 处于退单状态，跳过同步")
+            return False
+
+        order_sn = order.get('order_sn') or order.get('other_order_sn') or ''
+        self.db.add_sync_task(
+            order_id=order_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            initial_attempts=0,
+            max_attempts=self.max_sync_attempts,
+            douyin_url=order.get('douyin_url', ''),
+            shequ_id=order.get('shequ_id', 0),
+            order_sn=order_sn
+        )
+
+        task = self.db.get_sync_task(order_id)
+        if task:
+            await self._process_single_sync_task(context.bot, task)
+        return True
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理收到的消息"""
@@ -51,11 +137,13 @@ class TelegramBot:
         log(f"收到消息: {message_text[:100]}... (来自用户 {chat_id})")
         
         douyin_urls = self.extract_douyin_urls(message_text)
-        if not douyin_urls:
+        order_ids, order_sns = self.extract_order_identifiers(message_text)
+        if not douyin_urls and not order_ids and not order_sns:
             return
         
         selected_shequ_ids = set(self.db.get_selected_shequ_ids())
         is_all_selected = self.db.is_all_shequ_selected()
+        processed_order_ids = set()
         
         for url in douyin_urls:
             log(f"找到抖音链接: {url}")
@@ -64,37 +152,59 @@ class TelegramBot:
                 log(f"未找到链接 {url} 对应的订单")
                 continue
             
-            order_id = order.get('order_id')
-            order_shequ_id = order.get('shequ_id', 0)
-            log(f"找到订单 ID: {order_id}, 第三方ID: {order_shequ_id}")
-            
-            if not is_all_selected and selected_shequ_ids and order_shequ_id not in selected_shequ_ids:
-                log(f"订单 {order_id} 不属于选中的第三方分类，跳过处理")
-                await update.message.reply_text(
-                    "订单不属于当前选中的第三方分类，已跳过处理。",
-                    reply_to_message_id=message_id
-                )
-                continue
-            
-            if self.db.is_refund_status(order):
-                log(f"订单 {order_id} 处于退单状态，跳过同步")
-                # 不再回复中间状态，只在最终状态时通知
-                continue
-            
-            self.db.add_sync_task(
-                order_id=order_id,
-                chat_id=chat_id,
-                message_id=message_id,
-                initial_attempts=0,
-                max_attempts=self.max_sync_attempts,
-                douyin_url=order.get('douyin_url', ''),
-                shequ_id=order.get('shequ_id', 0),
-                order_sn=order.get('order_sn', '')
+            await self._enqueue_order_sync(
+                update,
+                context,
+                order,
+                chat_id,
+                message_id,
+                selected_shequ_ids,
+                is_all_selected,
+                processed_order_ids,
+                "douyin_url"
             )
-            
-            task = self.db.get_sync_task(order_id)
-            if task:
-                await self._process_single_sync_task(context.bot, task)
+
+        for order_id in order_ids:
+            if order_id in processed_order_ids:
+                continue
+            log(f"检测到订单ID: {order_id}")
+            order = self.db.find_order_by_order_id(order_id)
+            if not order:
+                order = self.db.find_order_by_order_sn(str(order_id))
+            if not order:
+                order = await self._fetch_order_by_id(order_id)
+            if not order:
+                log(f"未找到订单ID/单号 {order_id} 对应的订单")
+                continue
+            await self._enqueue_order_sync(
+                update,
+                context,
+                order,
+                chat_id,
+                message_id,
+                selected_shequ_ids,
+                is_all_selected,
+                processed_order_ids,
+                "order_id"
+            )
+
+        for order_sn in order_sns:
+            log(f"检测到订单号: {order_sn}")
+            order = self.db.find_order_by_order_sn(order_sn)
+            if not order:
+                log(f"未找到订单号 {order_sn} 对应的订单")
+                continue
+            await self._enqueue_order_sync(
+                update,
+                context,
+                order,
+                chat_id,
+                message_id,
+                selected_shequ_ids,
+                is_all_selected,
+                processed_order_ids,
+                "order_sn"
+            )
 
     async def handle_set_shequ_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /setshequ 命令 - 显示第三方设置界面"""
@@ -420,4 +530,3 @@ class TelegramBot:
         except Exception as e:
             log(f"发送通知失败: {e}")
             await bot.send_message(chat_id=chat_id, text=text)
-
