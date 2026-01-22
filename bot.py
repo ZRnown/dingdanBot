@@ -98,10 +98,6 @@ class TelegramBot:
 
         if not is_all_selected and selected_shequ_ids and order_shequ_id not in selected_shequ_ids:
             log(f"订单 {order_id} 不属于选中的第三方分类，跳过处理")
-            await update.message.reply_text(
-                "订单不属于当前选中的第三方分类，已跳过处理。",
-                reply_to_message_id=message_id
-            )
             return False
 
         if self.db.is_refund_status(order):
